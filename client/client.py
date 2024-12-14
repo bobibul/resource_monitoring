@@ -2,27 +2,20 @@ import sys
 import psutil
 from py3nvml import py3nvml
 from PySide6.QtWidgets import QApplication, QMainWindow
-from PySide6.QtCore import QTimer, QTime, QDateTime, Signal, QObject
+from PySide6.QtCore import QTimer, QTime, QDateTime
 from PySide6.QtNetwork import QTcpSocket
-from PySide6.QtWidgets import QFileDialog
 from PySide6.QtGui import QIcon
-import subprocess
 from ui_clientwindow import Ui_ClientWindow
-import json
 from concurrent.futures import ThreadPoolExecutor
-import logging
-import struct
+import json
+import atexit
+import os
 
-# 로그 레벨 설정
-logging.basicConfig(level=logging.ERROR)
 
 class ClientWindow(QMainWindow):
-    connectionResult = Signal(bool, str)  # 연결 결과를 전달할 시그널
-
     def __init__(self):
         super().__init__()
         self.ui = Ui_ClientWindow()
-        self.setWindowIcon(QIcon('client_icon.ico'))
         self.ui.setupUi(self)  # UI 설정
 
         self.tcpSocket = QTcpSocket(self)
@@ -31,45 +24,28 @@ class ClientWindow(QMainWindow):
         self.timeValue = QTime(0, 0, 0)
 
         self.ui.connect.clicked.connect(self.connectToServer)
-        self.ui.onButton.clicked.connect(self.sendOnMessage)
-        self.ui.offButton.clicked.connect(self.sendOffMessage)
-        self.ui.programSearchButton.clicked.connect(self.openFileDialog)
-        self.timer.timeout.connect(self.updateDisplay)
+        self.timer.timeout.connect(self.updateDisplay) # 1초마다 디스플레이 업데이트, 서버 연결 상태 시 리소스 전송
 
-        self.ui.onButton.setEnabled(True)
-        self.ui.offButton.setEnabled(False)
-
-        self.computing_resources = [0] * 7  # CPU, GPU0, GPU1, GPU2, Memory, Time, program_name
+        self.computing_resources = [0] * 9  # elapsed_time, cpu, memory, gpu0, gpu1, gpu2, gpu3, gpu4, gpu5
 
         self.connecting_state = False
+        self.connectToServer()
 
         self.executor = ThreadPoolExecutor(max_workers=3)
 
         self.loadSettings()  # 설정 로드 및 UI 초기화
-        self.gpuSetting()
-        self.progressBarSetting()
+        self.gpuSetting() # gpu 이름 및 nvml 시작하기
+        self.progressBarSetting() # progressBar 연동되는거 설정
+        self.timer_start() # 타이머 시작
 
-    def openFileDialog(self):
-        file_dialog = QFileDialog()
-        file_path, _ = file_dialog.getOpenFileName(
-            None, 
-            "Select Program", 
-            "", 
-            "Executable Files (*.exe);;All Files (*)"
-        )
-        if file_path:
-            self.ui.program_path.setText(file_path)
+        atexit.register(self.saveSettings) # 프로그램 종료 시 호출
 
     def loadSettings(self):
         try:
-            with open('_internal/config.json', 'r') as f:
+            with open('config.json', 'r') as f:
                 config = json.load(f)
                 self.ui.client_name.setText(config.get("client_name", ""))
                 self.ui.IP_address.setText(config.get("server_address", ""))
-                self.ui.program_path.setText(config.get("program_path", ""))
-                self.ui.server_port.setText(str(config.get("port_number", 0)))
-                self.ui.start_time.setText(config.get("start_time", ""))
-                self.ui.end_time.setText(config.get("end_time", ""))
                 self.ui.current_state.append("설정이 로드되었습니다.")
         except FileNotFoundError:
             self.ui.current_state.append("설정 파일을 찾을 수 없습니다. 기본 설정을 사용합니다.")
@@ -78,59 +54,31 @@ class ClientWindow(QMainWindow):
         config = {
             "client_name": self.ui.client_name.text(),
             "server_address": self.ui.IP_address.text(),
-            "program_path": self.ui.program_path.text(),
-            "port_number": int(self.ui.server_port.text()),
-            "start_time": self.ui.start_time.text(),
-            "end_time": self.ui.end_time.text()
         }
-        with open('_internal/config.json', 'w') as f:
+        with open('config.json', 'w') as f:
             json.dump(config, f, indent=4)
 
 
     def connectToServer(self):
         serverAddress = self.ui.IP_address.text()
-        port = int(self.ui.server_port.text())
+        port = 8095
         self.tcpSocket.connectToHost(serverAddress, port)
-        if self.tcpSocket.waitForConnected(3000):
+        if self.tcpSocket.waitForConnected(500):
             self.ui.current_state.append("서버에 연결되었습니다.")
             self.tcpSocket.readyRead.connect(self.receiveMessage)
+            self.connecting_state = True
             
         else:
             error_message = "서버에 연결하지 못했습니다: " + self.tcpSocket.errorString()
             self.ui.current_state.append(error_message)
  
 
-    def sendOnMessage(self):
+    def timer_start(self):
         self.timer.start()
-        self.ui.onButton.setEnabled(False)
-        self.ui.offButton.setEnabled(True)
-        self.startKakaoTalk()
-
         currentTime = QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
         self.ui.current_state.append(currentTime + " 장치 켜짐")
         self.ui.start_time.setText(currentTime)
 
-        # JSON 파일에 변경된 정보 저장
-        self.saveSettings()
-
-    def sendOffMessage(self):
-        self.timer.stop()
-        self.timeValue.setHMS(0, 0, 0)
-
-        self.offKakaoTalk()
-
-        timeText = self.timeValue.toString("HH:mm:ss")
-        self.ui.current_time.setText(timeText)
-
-        self.ui.onButton.setEnabled(True)
-        self.ui.offButton.setEnabled(False)
-
-        currentTime = QDateTime.currentDateTime().toString("yyyy-MM-dd HH:mm:ss")
-        self.ui.current_state.append(currentTime + " 장치 꺼짐")
-        self.ui.end_time.setText(currentTime)
-
-        # JSON 파일에 변경된 정보 저장
-        self.saveSettings()
 
     def receiveMessage(self):
         print("receiveMessage")
@@ -139,15 +87,13 @@ class ClientWindow(QMainWindow):
             message = data.decode('utf-8')
             self.ui.current_state.append(f"서버에서 수신한 메시지: {message}")
 
-            if message == "on":
-                self.sendOnMessage()
-            elif message == "off":
-                self.sendOffMessage()
+            if message == "off":
+                # print("off_system")
+                os.system("shutdown /s /t 1")
 
     def updateDisplay(self):
         self.timeValue = self.timeValue.addSecs(1)
-        self.computing_resources[5] = self.QTimeToDouble(self.timeValue)
-        timeText = self.timeValue.toString("HH:mm:ss")
+        self.computing_resources[0] = self.QTimeToDouble(self.timeValue)
 
         # CPU, GPU, 메모리 사용량 업데이트
         self.executor.submit(self.getCPUUsage)
@@ -155,18 +101,20 @@ class ClientWindow(QMainWindow):
         self.executor.submit(self.getMemoryUsage)
 
         # UI 업데이트 최소화
-        self.ui.current_time.setText(timeText)
-        self.ui.cpu_usage.setText(f"{self.computing_resources[0]:.1f}")
-        self.ui.gpu0_usage.setText(f"{self.computing_resources[1]:.1f}")
-        self.ui.gpu1_usage.setText(f"{self.computing_resources[2]:.1f}")
-        self.ui.gpu2_usage.setText(f"{self.computing_resources[3]:.1f}")
-        self.ui.memory_usage_per.setText(f"{self.computing_resources[4]:.1f}")
-
+        self.ui.current_time.setText(self.timeValue.toString("HH:mm:ss"))
+        self.ui.cpu_usage.setText(f"{self.computing_resources[1]:.1f}")
+        self.ui.mem_usage.setText(f"{self.computing_resources[2]:.1f}")
+        self.ui.gpu_usage_0.setText(f"{self.computing_resources[3]:.1f}")
+        self.ui.gpu_usage_1.setText(f"{self.computing_resources[4]:.1f}")
+        self.ui.gpu_usage_2.setText(f"{self.computing_resources[5]:.1f}")
+        self.ui.gpu_usage_3.setText(f"{self.computing_resources[6]:.1f}")
+        self.ui.gpu_usage_4.setText(f"{self.computing_resources[7]:.1f}")
+        self.ui.gpu_usage_5.setText(f"{self.computing_resources[8]:.1f}")
+        
         # ProgressBar 업데이트
         self.progressBarSetting()
 
-        # 리소스 전송
-        self.sendComputingResource()
+        if(self.connecting_state) : self.sendComputingResource()
 
     def gpuSetting(self):
         py3nvml.nvmlInit()
@@ -175,36 +123,26 @@ class ClientWindow(QMainWindow):
             for i in range(device_count):
                 handle = py3nvml.nvmlDeviceGetHandleByIndex(i)
                 name = py3nvml.nvmlDeviceGetName(handle)
+                gpu_label = getattr(self.ui, f"gpu_name_{i}")
+                gpu_label.setText(name)
                 self.ui.current_state.append(f"GPU {i} name: {name}")
-                if i == 0:
-                    self.ui.gpu0_name.setText(name)
-                elif i == 1:
-                    self.ui.cpu_name_6.setText(name)
-                elif i == 2:
-                    self.ui.cpu_name_12.setText(name)
-        else:
+
+        else:   
             self.ui.current_state.append("No GPU found")
-        py3nvml.nvmlShutdown()
 
     def getCPUUsage(self):
-        self.computing_resources[0] = psutil.cpu_percent(interval=1)
+        self.computing_resources[1] = psutil.cpu_percent(interval=1)
 
     def getGPUUsage(self):
-        try:
-            py3nvml.nvmlInit()
             device_count = py3nvml.nvmlDeviceGetCount()
             for i in range(device_count):
                 handle = py3nvml.nvmlDeviceGetHandleByIndex(i)
                 utilization = py3nvml.nvmlDeviceGetUtilizationRates(handle)
-                self.computing_resources[i + 1] = utilization.gpu
-        except Exception as e:
-            logging.error(f"Error getting GPU usage: {e}")
-        finally:
-            py3nvml.nvmlShutdown()
+                self.computing_resources[i + 3] = utilization.gpu
 
     def getMemoryUsage(self):
         memory_info = psutil.virtual_memory()
-        self.computing_resources[4] = memory_info.percent
+        self.computing_resources[2] = memory_info.percent
 
     def sendComputingResource(self):
         # 모든 값을 문자열로 변환하고 콤마로 구분
@@ -217,27 +155,22 @@ class ClientWindow(QMainWindow):
         self.tcpSocket.flush()
 
     def progressBarSetting(self):
-        self.ui.cpu_progressBar.setValue(self.computing_resources[0])
-        self.ui.gpu0_progressBar.setValue(self.computing_resources[1])
-        self.ui.gpu1_progressBar.setValue(self.computing_resources[2])
-        self.ui.gpu2_progressBar.setValue(self.computing_resources[3])
-        self.ui.memory_progressBar.setValue(self.computing_resources[4])
-        self.computing_resources[6] = self.ui.client_name.text()
+        self.ui.cpu_progressBar.setValue(self.computing_resources[1])
+        self.ui.memory_progressbar.setValue(self.computing_resources[2])
+
+        self.ui.gpu_progressbar_0.setValue(self.computing_resources[3])
+        self.ui.gpu_progressbar_1.setValue(self.computing_resources[4])
+        self.ui.gpu_progressbar_2.setValue(self.computing_resources[5])
+        self.ui.gpu_progressbar_3.setValue(self.computing_resources[6])
+        self.ui.gpu_progressbar_4.setValue(self.computing_resources[7])
+        self.ui.gpu_progressbar_5.setValue(self.computing_resources[8])
+        
 
     def QTimeToDouble(self, time):
         return time.hour() * 3600 + time.minute() * 60 + time.second() + time.msec() / 1000.0
+    
 
-    def startKakaoTalk(self):
-        kakaotalkFilePath = self.ui.program_path.text()
-        subprocess.Popen([kakaotalkFilePath], creationflags=subprocess.CREATE_NO_WINDOW)
 
-    def offKakaoTalk(self):
-        program_name = self.ui.program_path.text().split('/')[-1] 
-        subprocess.run(["taskkill", "/F", "/IM", program_name], creationflags=subprocess.CREATE_NO_WINDOW)
-
-    def closeEvent(self, event):
-        self.saveSettings()  # 프로그램 종료 시 설정 저장
-        super().closeEvent(event)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
