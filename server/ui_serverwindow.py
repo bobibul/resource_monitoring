@@ -59,11 +59,6 @@ class Ui_ServerWindow:
         self.serverIPLabel.setStyleSheet("color: white;")
         self.verticalLayout.addWidget(self.serverIPLabel)
 
-        self.startServerButton = QPushButton("서버 시작", self.centralwidget)
-        self.startServerButton.setFont(QFont())
-        self.startServerButton.setStyleSheet("color: white;")
-        self.verticalLayout.addWidget(self.startServerButton)
-
     def addColumnNames(self):
         from PySide6.QtWidgets import QLabel
         from PySide6.QtGui import QFont
@@ -102,10 +97,8 @@ class Ui_ServerWindow:
 
         # 새로운 위젯 컨테이너
         device.deviceWidget = QWidget(self.scrollAreaWidgetContents)
-        device.deviceWidget.setMaximumHeight(50)
-        device.deviceWidget.setMinimumWidth(1000)
-        
         device.layout = QHBoxLayout(device.deviceWidget)
+
         def addSeparator():
             separator = QFrame(device.deviceWidget)
             separator.setFrameShape(QFrame.VLine)

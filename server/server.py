@@ -63,8 +63,6 @@ class ServerWindow(QMainWindow):
         self.timer.timeout.connect(self.update_window)  
         self.timer.start()  # 타이머 시작
 
-        self.ui.startServerButton.clicked.connect(lambda : self.ui.addDeviceWidget("123.123.123.123", Device()))
-
     def get_local_ip(self):
         # 임의의 외부 주소로 소켓을 연결하여 로컬 IP 주소를 가져옵니다.
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -107,6 +105,7 @@ class ServerWindow(QMainWindow):
         self.clear_layout(self.devices[client_ip].layout)
         self.removeLine(self.devices[client_ip])
         self.ui.verticalLayout_2.removeWidget(self.devices[client_ip].line)
+        self.ui.verticalLayout_2.update()
 
         self.ui.textEdit.append(f"disConnected: {client_ip}")
 
